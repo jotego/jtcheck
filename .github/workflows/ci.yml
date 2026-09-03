@@ -55,9 +55,9 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/jotego/jtcores.git "$RUNNER_TEMP/jtcores"
           cd "$RUNNER_TEMP/jtcores"
-          # Init only jtframe, without recursing into its nested submodules
-          # (modules/jtframe/target/pocket is SSH-only and not needed here)
-          git submodule update --init --no-recommend-shallow --depth 1 --no-recursive modules/jtframe
+          # Init and fetch only jtframe itself (not its nested pocket submodule)
+          git submodule init modules/jtframe
+          git submodule update --depth 1 modules/jtframe
 
       - name: Build JTFRAME CLI
         env:
