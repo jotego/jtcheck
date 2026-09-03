@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - run: npx eslint .
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Syntax check
+        run: node --check src/analyzer.mjs src/index.mjs src/cli.mjs
+
+      - name: Run tests
+        run: node --test
+
+  integration:
+    name: Integration test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.4'
+
+      - name: Shallow-clone jtcores
+        run: |
+          git clone --depth 1 https://github.com/jotego/jtcores.git "$RUNNER_TEMP/jtcores"
+          cd "$RUNNER_TEMP/jtcores"
+          # jtframe is the only submodule the action needs; private ones are skipped
+          git submodule update --init --depth 1 modules/jtframe
+
+      - name: Build JTFRAME CLI
+        env:
+          JTROOT: ${{ runner.temp }}/jtcores
+        run: |
+          export JTFRAME="$JTROOT/modules/jtframe"
+          export MODULES="$JTROOT/modules"
+          export CORES="$JTROOT/cores"
+          export JTBIN="$RUNNER_TEMP/jtbin"
+          mkdir -p "$JTBIN"
+          "$JTFRAME/bin/jtframe" --help > /dev/null
+
+      - name: Run CLI against real repository
+        run: |
+          output=$(node src/cli.mjs \
+            --repo "$RUNNER_TEMP/jtcores" \
+            --changed-files "modules/jtframe/hdl/jtframe_ff.v")
+          echo "$output"
+          # Verify the output is valid JSON with expected fields
+          echo "$output" | node -e "
+            const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            if (typeof data.affected !== 'object') throw new Error('missing affected');
+            if (!Array.isArray(data.unmatchedFiles)) throw new Error('missing unmatchedFiles');
+            if (!Array.isArray(data.unresolvedCores)) throw new Error('missing unresolvedCores');
+            const n = Object.keys(data.affected).length;
+            if (n === 0) throw new Error('jtframe_ff.v should affect at least one core');
+            console.log(n + ' cores affected — integration test passed');
+          "
