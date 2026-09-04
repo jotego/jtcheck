@@ -99,9 +99,11 @@ function createCoreOverlay(root, core, temporaryDirectory) {
 
   const overlayHdl = path.join(overlayCore, 'hdl');
   fs.mkdirSync(overlayHdl, { recursive: true });
-  const generatedHeader = path.join(overlayHdl, `jt${core}_header.v`);
-  if (!fs.existsSync(generatedHeader)) {
-    fs.writeFileSync(generatedHeader, '// Placeholder used only while resolving JTFRAME files.\n');
+  for (const placeholder of [`jt${core}_header.v`, `jt${core}_mmr.v`]) {
+    const target = path.join(overlayHdl, placeholder);
+    if (!fs.existsSync(target)) {
+      fs.writeFileSync(target, '// Placeholder used only while resolving JTFRAME files.\n');
+    }
   }
 
   return overlayCores;
