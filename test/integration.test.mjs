@@ -22,7 +22,7 @@ const CASES = [
   },
   {
     file: 'modules/jtframe/hdl/jtframe_ff.v',
-    mustInclude: ['rastan'],  // affects many cores; just check a known one is present
+    mustInclude: ['outrun'],  // affects many cores; just check a known one is present
   },
 ];
 
