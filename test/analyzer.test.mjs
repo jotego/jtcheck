@@ -11,6 +11,7 @@ import {
   markdownReport,
   normalizeChangedFiles,
   pullRequestComment,
+  splitList,
   PULL_REQUEST_COMMENT_MARKER,
 } from '../src/analyzer.mjs';
 
@@ -204,4 +205,101 @@ test('does not allow a changed filename to escape its Markdown code span', () =>
 
   assert.match(comment, /`a\\`@maintainers\.v`/);
   assert.doesNotMatch(comment, /\n@maintainers/);
+});
+
+test('splitList handles commas, spaces, and empty input', () => {
+  assert.deepEqual(splitList('a,b,c'), ['a', 'b', 'c']);
+  assert.deepEqual(splitList('a , b , c'), ['a', 'b', 'c']);
+  assert.deepEqual(splitList(' modules/jt900h , modules/pocket '), ['modules/jt900h', 'modules/pocket']);
+  assert.deepEqual(splitList('single'), ['single']);
+  assert.deepEqual(splitList(''), []);
+  assert.deepEqual(splitList(null), []);
+  assert.deepEqual(splitList(undefined), []);
+  assert.deepEqual(splitList('a,,b,'), ['a', 'b']);
+});
+
+test('skipSubmodules silently drops cores that fail on a skipped submodule', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jtframe-skip-'));
+  try {
+    for (const core of ['good', 'needs900h', 'needspocket']) {
+      const config = path.join(root, `cores/${core}/cfg`);
+      fs.mkdirSync(config, { recursive: true });
+      fs.writeFileSync(path.join(config, 'files.yaml'), `${core}:\n`);
+      fs.writeFileSync(path.join(config, 'macros.def'), `CORENAME=${core}\n`);
+    }
+    const result = analyzeRepository({
+      repositoryPath: root,
+      changedFiles: ['cores/good/hdl/good.v'],
+      listFiles: (_root, core) => {
+        if (core === 'needs900h') throw new Error('modules/jt900h/hdl/jt900h.v did not match');
+        if (core === 'needspocket') throw new Error('modules/jtframe/target/pocket/missing.v not found');
+        return ['cores/good/hdl/good.v'];
+      },
+      skipSubmodules: ['modules/jt900h', 'modules/jtframe/target/pocket'],
+    });
+
+    assert.deepEqual(result.affected, { good: ['cores/good/hdl/good.v'] });
+    assert.deepEqual(result.unresolvedCores, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('skipSubmodules still reports errors unrelated to skipped paths', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jtframe-skip-other-'));
+  try {
+    for (const core of ['good', 'broken']) {
+      const config = path.join(root, `cores/${core}/cfg`);
+      fs.mkdirSync(config, { recursive: true });
+      fs.writeFileSync(path.join(config, 'files.yaml'), `${core}:\n`);
+      fs.writeFileSync(path.join(config, 'macros.def'), `CORENAME=${core}\n`);
+    }
+    const result = analyzeRepository({
+      repositoryPath: root,
+      changedFiles: ['cores/good/hdl/good.v'],
+      listFiles: (_root, core) => {
+        if (core === 'broken') throw new Error('some completely different error');
+        return ['cores/good/hdl/good.v'];
+      },
+      skipSubmodules: ['modules/jt900h'],
+    });
+
+    assert.deepEqual(result.unresolvedCores, [{ core: 'broken', error: 'some completely different error' }]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('creates module-level mmr placeholders and cleans them up', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jtframe-modmmr-'));
+  try {
+    const command = path.join(root, 'modules/jtframe/bin/jtframe');
+    fs.mkdirSync(path.dirname(command), { recursive: true });
+    // Create a module with mmr.yaml but no _mmr.v file
+    fs.mkdirSync(path.join(root, 'modules/jt05415x/cfg'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'modules/jt05415x/hdl'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'modules/jt05415x/cfg/mmr.yaml'), '- name: "054156"\n');
+    // Create a core that references files from that module
+    fs.mkdirSync(path.join(root, 'cores/moo/cfg'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'cores/moo/cfg/files.yaml'), 'moo:\n');
+    fs.writeFileSync(path.join(root, 'cores/moo/cfg/macros.def'), 'CORENAME=moo\n');
+    fs.writeFileSync(command, `#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = files
+test "$2" = plain
+test "$3" = moo
+# Verify the module mmr placeholder exists
+test -f "$JTROOT/modules/jt05415x/hdl/jt054156_mmr.v"
+printf '%s\\n' "$JTROOT/modules/jt05415x/hdl/jt054156.v" > files
+`);
+    fs.chmodSync(command, 0o755);
+    // Write the real module file the core references
+    fs.writeFileSync(path.join(root, 'modules/jt05415x/hdl/jt054156.v'), 'module jt054156; endmodule\n');
+
+    assert.deepEqual(filesForCore(root, 'moo'), ['modules/jt05415x/hdl/jt054156.v']);
+    // Placeholder must be cleaned up after filesForCore returns
+    assert.equal(fs.existsSync(path.join(root, 'modules/jt05415x/hdl/jt054156_mmr.v')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
