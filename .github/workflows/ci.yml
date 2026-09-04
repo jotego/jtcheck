@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '17 6 * * *'  # daily at 06:17 UTC
 
 jobs:
   lint:
