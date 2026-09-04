@@ -101,20 +101,8 @@ jobs:
           mkdir -p "$JTBIN"
           "$JTFRAME/bin/jtframe" --help > /dev/null
 
-      - name: Run CLI against real repository
-        run: |
-          output=$(node src/cli.mjs \
-            --repo "$RUNNER_TEMP/jtcores" \
-            --changed-files "modules/jtframe/hdl/jtframe_ff.v" \
-            --skip-submodules "${{ steps.submodules.outputs.skipped }}")
-          echo "$output"
-          # Verify the output is valid JSON with expected fields
-          echo "$output" | node -e "
-            const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-            if (typeof data.affected !== 'object') throw new Error('missing affected');
-            if (!Array.isArray(data.unmatchedFiles)) throw new Error('missing unmatchedFiles');
-            if (!Array.isArray(data.unresolvedCores)) throw new Error('missing unresolvedCores');
-            const n = Object.keys(data.affected).length;
-            if (n === 0) throw new Error('jtframe_ff.v should affect at least one core');
-            console.log(n + ' cores affected — integration test passed');
-          "
+      - name: Run integration tests
+        env:
+          JTCORES_ROOT: ${{ runner.temp }}/jtcores
+          JTCHECK_SKIP_SUBMODULES: ${{ steps.submodules.outputs.skipped }}
+        run: node --test test/integration.test.mjs
