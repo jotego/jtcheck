@@ -54,14 +54,30 @@ jobs:
       - name: Shallow-clone jtcores
         run: |
           git clone --depth 1 https://github.com/jotego/jtcores.git "$RUNNER_TEMP/jtcores"
-          cd "$RUNNER_TEMP/jtcores"
-          # Init all submodules, then deregister the three SSH-only ones
-          # (jt900h, pocket, crasm) that need a PAT we don't have here.
-          git submodule init
-          for sm in modules/jt900h modules/jtframe/target/pocket modules/jt680x/crasm; do
-            git config --remove-section "submodule.$sm" 2>/dev/null || true
+
+      - name: Initialize accessible submodules
+        working-directory: ${{ runner.temp }}/jtcores
+        run: |
+          git config -f .gitmodules --get-regexp '\.url$' \
+          | while read -r key url; do
+              path_key="${key/.url/.path}"
+              path="$(git config -f .gitmodules --get "$path_key")"
+              # Skip orphan .gitmodules entries — listed but not actually
+              # registered as mode-160000 in the tree (e.g. jt49/jt89 live
+              # nested inside jt12, top-level entries are stale).
+              if ! git ls-tree HEAD "$path" 2>/dev/null | grep -q '^160000 commit'; then
+                  echo "::notice::Skipping orphan $path — not registered as submodule in tree"
+                  continue
+              fi
+              if [[ "$url" != https://* ]]; then
+                  echo "::notice::Skipping SSH-only submodule $path ($url)"
+                  continue
+              fi
+              echo "Init: $path ($url)"
+              if ! git submodule update --init --recursive -- "$path" 2>&1; then
+                  echo "::notice::Could not clone $path — probably a private repo, continuing without it"
+              fi
           done
-          git submodule update --depth 1
 
       - name: Build JTFRAME CLI
         env:
