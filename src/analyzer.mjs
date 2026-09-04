@@ -56,6 +56,19 @@ function isGeneratedSource(filename) {
   return /_(?:header|mmr)\.v$/i.test(path.basename(filename));
 }
 
+function ensurePlaceholders(hdlDir, stem, kinds) {
+  const created = [];
+  for (const kind of kinds) {
+    const target = path.join(hdlDir, `jt${stem}_${kind}.v`);
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(hdlDir, { recursive: true });
+      fs.writeFileSync(target, '// Placeholder used only while resolving JTFRAME files.\n');
+      created.push(target);
+    }
+  }
+  return created;
+}
+
 /**
  * JTFRAME's MMR generator writes generated Verilog directly below $CORES.
  * Give it a writable shadow of one core: normal HDL files are symlinks, while
@@ -99,12 +112,7 @@ function createCoreOverlay(root, core, temporaryDirectory) {
 
   const overlayHdl = path.join(overlayCore, 'hdl');
   fs.mkdirSync(overlayHdl, { recursive: true });
-  for (const placeholder of [`jt${core}_header.v`, `jt${core}_mmr.v`]) {
-    const target = path.join(overlayHdl, placeholder);
-    if (!fs.existsSync(target)) {
-      fs.writeFileSync(target, '// Placeholder used only while resolving JTFRAME files.\n');
-    }
-  }
+  ensurePlaceholders(overlayHdl, core, ['header', 'mmr']);
 
   return overlayCores;
 }
@@ -117,9 +125,28 @@ function createCoreOverlay(root, core, temporaryDirectory) {
  * the checkout. JTFRAME itself remains responsible for YAML, macro, glob,
  * alias, and nested-config resolution.
  */
+function ensureModuleMmrPlaceholders(root) {
+  const modulesDir = filesystemPath(root, 'modules');
+  if (!fs.existsSync(modulesDir)) return [];
+  const created = [];
+  for (const mod of fs.readdirSync(modulesDir, { withFileTypes: true })) {
+    if (!mod.isDirectory()) continue;
+    const mmrYaml = path.join(modulesDir, mod.name, 'cfg', 'mmr.yaml');
+    if (!fs.existsSync(mmrYaml)) continue;
+    const hdlDir = path.join(modulesDir, mod.name, 'hdl');
+    if (!fs.existsSync(hdlDir)) continue;
+    const yaml = fs.readFileSync(mmrYaml, 'utf8');
+    const nameMatch = yaml.match(/^\s*-\s*name:\s*["']?(\S+?)["']?\s*$/m);
+    const stem = nameMatch ? nameMatch[1] : mod.name;
+    created.push(...ensurePlaceholders(hdlDir, stem, ['mmr']));
+  }
+  return created;
+}
+
 export function filesForCore(root, core) {
   const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'jtcores-affected-'));
   const mmrConfig = filesystemPath(root, `cores/${core}/cfg/mmr.yaml`);
+  const modulePlaceholders = ensureModuleMmrPlaceholders(root);
   const overlayCores = createCoreOverlay(root, core, workingDirectory);
   const script = [
     'set -euo pipefail',
@@ -155,6 +182,7 @@ export function filesForCore(root, core) {
     throw new Error(`jtframe files plain ${core} failed: ${detail}`);
   } finally {
     fs.rmSync(workingDirectory, { recursive: true, force: true });
+    for (const p of modulePlaceholders) fs.rmSync(p, { force: true });
   }
 }
 
