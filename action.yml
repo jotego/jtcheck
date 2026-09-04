@@ -15,6 +15,10 @@ inputs:
     description: Head commit for the pull-request diff.
     required: false
     default: HEAD
+  skip-submodules:
+    description: Comma-separated submodule paths to ignore when a core fails to resolve because of them.
+    required: false
+    default: ''
 outputs:
   affected-cores:
     description: JSON object mapping each affected core to its changed dependency paths.

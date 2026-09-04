@@ -5,6 +5,10 @@ import { execFileSync } from 'node:child_process';
 
 export const PULL_REQUEST_COMMENT_MARKER = '<!-- jtcores-affected-cores -->';
 
+export function splitList(value) {
+  return value ? String(value).split(',').map((s) => s.trim()).filter(Boolean) : [];
+}
+
 export function actionInput(name, env = process.env, fallback = '') {
   return env[`INPUT_${name.replace(/ /g, '_').toUpperCase()}`] ?? fallback;
 }
@@ -211,7 +215,7 @@ export function affectFromFileLists({ changedFiles, fileLists, submodules = [] }
   };
 }
 
-export function analyzeRepository({ repositoryPath, changedFiles, listFiles = filesForCore }) {
+export function analyzeRepository({ repositoryPath, changedFiles, listFiles = filesForCore, skipSubmodules = [] }) {
   const root = path.resolve(repositoryPath);
   const fileLists = {};
   const unresolvedCores = [];
@@ -219,6 +223,9 @@ export function analyzeRepository({ repositoryPath, changedFiles, listFiles = fi
     try {
       fileLists[core] = listFiles(root, core);
     } catch (error) {
+      if (skipSubmodules.length > 0 && skipSubmodules.some((sm) => error.message.includes(sm))) {
+        continue;
+      }
       unresolvedCores.push({ core, error: error.message });
     }
   }

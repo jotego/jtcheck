@@ -7,6 +7,7 @@ import {
   markdownReport,
   normalizeChangedFiles,
   pullRequestComment,
+  splitList,
 } from './analyzer.mjs';
 
 function setOutput(name, value) {
@@ -27,7 +28,8 @@ try {
       actionInput('base-sha'),
       actionInput('head-sha', process.env, 'HEAD'),
     );
-  const result = analyzeRepository({ repositoryPath, changedFiles });
+  const skipSubmodules = splitList(actionInput('skip-submodules'));
+  const result = analyzeRepository({ repositoryPath, changedFiles, skipSubmodules });
   const report = markdownReport(result);
 
   setOutput('affected-cores', JSON.stringify(result.affected));

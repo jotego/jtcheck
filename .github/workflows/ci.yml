@@ -56,6 +56,7 @@ jobs:
           git clone --depth 1 https://github.com/jotego/jtcores.git "$RUNNER_TEMP/jtcores"
 
       - name: Initialize accessible submodules
+        id: submodules
         working-directory: ${{ runner.temp }}/jtcores
         run: |
           git config -f .gitmodules --get-regexp '\.url$' \
@@ -71,13 +72,21 @@ jobs:
               fi
               if [[ "$url" != https://* ]]; then
                   echo "::notice::Skipping SSH-only submodule $path ($url)"
+                  echo "$path" >> "$RUNNER_TEMP/skipped_submodules.txt"
                   continue
               fi
               echo "Init: $path ($url)"
               if ! git submodule update --init --recursive -- "$path" 2>&1; then
                   echo "::notice::Could not clone $path — probably a private repo, continuing without it"
+                  echo "$path" >> "$RUNNER_TEMP/skipped_submodules.txt"
               fi
           done
+          if [ -f "$RUNNER_TEMP/skipped_submodules.txt" ]; then
+            list=$(paste -sd, "$RUNNER_TEMP/skipped_submodules.txt")
+          else
+            list=""
+          fi
+          echo "skipped=$list" >> "$GITHUB_OUTPUT"
 
       - name: Build JTFRAME CLI
         env:
@@ -94,7 +103,8 @@ jobs:
         run: |
           output=$(node src/cli.mjs \
             --repo "$RUNNER_TEMP/jtcores" \
-            --changed-files "modules/jtframe/hdl/jtframe_ff.v")
+            --changed-files "modules/jtframe/hdl/jtframe_ff.v" \
+            --skip-submodules "${{ steps.submodules.outputs.skipped }}")
           echo "$output"
           # Verify the output is valid JSON with expected fields
           echo "$output" | node -e "
