@@ -55,12 +55,13 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/jotego/jtcores.git "$RUNNER_TEMP/jtcores"
           cd "$RUNNER_TEMP/jtcores"
-          # Init jtframe only; pocket is nested under its path and gets
-          # registered too, so deactivate it before the fetch.
-          git submodule init modules/jtframe
-          git submodule deinit modules/jtframe/target/pocket 2>/dev/null || true
-          git config --remove-section submodule.modules/jtframe/target/pocket 2>/dev/null || true
-          git submodule update --depth 1 modules/jtframe
+          # Init all submodules, then deregister the three SSH-only ones
+          # (jt900h, pocket, crasm) that need a PAT we don't have here.
+          git submodule init
+          for sm in modules/jt900h modules/jtframe/target/pocket modules/jt680x/crasm; do
+            git config --remove-section "submodule.$sm" 2>/dev/null || true
+          done
+          git submodule update --depth 1
 
       - name: Build JTFRAME CLI
         env:
