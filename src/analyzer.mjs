@@ -112,42 +112,58 @@ function createCoreOverlay(root, core, temporaryDirectory) {
 
   const overlayHdl = path.join(overlayCore, 'hdl');
   fs.mkdirSync(overlayHdl, { recursive: true });
-  ensurePlaceholders(overlayHdl, core, ['header', 'mmr']);
+  ensurePlaceholders(overlayHdl, core, ['header']);
 
   return overlayCores;
 }
 
 /**
- * Ask JTFRAME for the authoritative file list of one core.
- *
- * `jtframe files plain` writes a file named `files` in its working directory.
- * A temporary directory keeps that generated file and ucode products out of
- * the checkout. JTFRAME itself remains responsible for YAML, macro, glob,
- * alias, and nested-config resolution.
+ * Run `jtframe mmr` for every core and module that has cfg/mmr.yaml so that
+ * all generated _mmr.v files exist before `jtframe files plain` resolves
+ * globs and explicit references. The checkout is ephemeral — no cleanup.
  */
-function ensureModuleMmrPlaceholders(root) {
-  const modulesDir = filesystemPath(root, 'modules');
-  if (!fs.existsSync(modulesDir)) return [];
-  const created = [];
-  for (const mod of fs.readdirSync(modulesDir, { withFileTypes: true })) {
-    if (!mod.isDirectory()) continue;
-    const mmrYaml = path.join(modulesDir, mod.name, 'cfg', 'mmr.yaml');
-    if (!fs.existsSync(mmrYaml)) continue;
-    const hdlDir = path.join(modulesDir, mod.name, 'hdl');
-    if (!fs.existsSync(hdlDir)) continue;
-    const yaml = fs.readFileSync(mmrYaml, 'utf8');
-    const nameMatch = yaml.match(/^\s*-\s*name:\s*["']?(\S+?)["']?\s*$/m);
-    const stem = nameMatch ? nameMatch[1] : mod.name;
-    created.push(...ensurePlaceholders(hdlDir, stem, ['mmr']));
+function generateAllMmr(root, workingDirectory, overlayCores) {
+  const lines = [
+    'set -euo pipefail',
+    'export JTROOT="$JTCORES_ROOT"',
+    'export JTFRAME="$JTROOT/modules/jtframe"',
+    'export CORES="$JTCORES_CORES"',
+    'export MODULES="$JTROOT/modules"',
+    'export JTBIN="$PWD/jtbin"',
+    'mkdir -p "$JTBIN"',
+  ];
+
+  let count = 0;
+  for (const [dir, flag] of [['cores', ''], ['modules', '-m']]) {
+    const base = filesystemPath(root, dir);
+    if (!fs.existsSync(base)) continue;
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!fs.existsSync(path.join(base, entry.name, 'cfg', 'mmr.yaml'))) continue;
+      lines.push(`"$JTFRAME/bin/jtframe" mmr ${flag ? flag + ' ' : ''}${entry.name} || true`);
+      count++;
+    }
   }
-  return created;
+
+  if (count === 0) return;
+
+  execFileSync('bash', ['-c', lines.join('\n')], {
+    cwd: workingDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      JTCORES_ROOT: root,
+      JTCORES_CORES: overlayCores,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 export function filesForCore(root, core) {
   const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'jtcores-affected-'));
-  const mmrConfig = filesystemPath(root, `cores/${core}/cfg/mmr.yaml`);
-  const modulePlaceholders = ensureModuleMmrPlaceholders(root);
   const overlayCores = createCoreOverlay(root, core, workingDirectory);
+  generateAllMmr(root, workingDirectory, overlayCores);
+
   const script = [
     'set -euo pipefail',
     'export JTROOT="$JTCORES_ROOT"',
@@ -156,7 +172,6 @@ export function filesForCore(root, core) {
     'export MODULES="$JTROOT/modules"',
     'export JTBIN="$PWD/jtbin"',
     'mkdir -p "$JTBIN"',
-    ...(fs.existsSync(mmrConfig) ? ['"$JTFRAME/bin/jtframe" mmr "$JTCORES_CORE"'] : []),
     '"$JTFRAME/bin/jtframe" files plain "$JTCORES_CORE"',
     'cat files',
   ].join('\n');
@@ -182,7 +197,6 @@ export function filesForCore(root, core) {
     throw new Error(`jtframe files plain ${core} failed: ${detail}`);
   } finally {
     fs.rmSync(workingDirectory, { recursive: true, force: true });
-    for (const p of modulePlaceholders) fs.rmSync(p, { force: true });
   }
 }
 
