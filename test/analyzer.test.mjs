@@ -15,7 +15,7 @@ import {
   PULL_REQUEST_COMMENT_MARKER,
 } from '../src/analyzer.mjs';
 
-test('uses generated MMR and header placeholders only to resolve the JTFRAME list', () => {
+test('runs jtframe mmr for all cores and modules, keeps header placeholder', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jtframe-files-'));
   try {
     const command = path.join(root, 'modules/jtframe/bin/jtframe');
@@ -34,8 +34,10 @@ test "$MODULES" = "$JTROOT/modules"
 test -d "$JTBIN"
 test "$CORES" != "$JTROOT/cores"
 if [ "$1" = mmr ]; then
-  test "$2" = demo
-  printf 'generated file\\n' > "$CORES/demo/hdl/demo_mmr.v"
+  # Generation pass runs mmr for every core/module with mmr.yaml
+  if [ "\${2:-}" = demo ]; then
+    printf 'generated file\\n' > "$CORES/demo/hdl/demo_mmr.v"
+  fi
   exit 0
 fi
 test "$1" = files
@@ -270,35 +272,43 @@ test('skipSubmodules still reports errors unrelated to skipped paths', () => {
   }
 });
 
-test('creates module-level mmr placeholders and cleans them up', () => {
+test('generates mmr for modules with multiple entries and cleans up', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jtframe-modmmr-'));
   try {
     const command = path.join(root, 'modules/jtframe/bin/jtframe');
     fs.mkdirSync(path.dirname(command), { recursive: true });
-    // Create a module with mmr.yaml but no _mmr.v file
+    // Module with TWO mmr entries (the bug: old code only handled the first)
     fs.mkdirSync(path.join(root, 'modules/jt05415x/cfg'), { recursive: true });
     fs.mkdirSync(path.join(root, 'modules/jt05415x/hdl'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'modules/jt05415x/cfg/mmr.yaml'), '- name: "054156"\n');
-    // Create a core that references files from that module
+    fs.writeFileSync(path.join(root, 'modules/jt05415x/cfg/mmr.yaml'),
+      '- name: "054156"\n  no_core_name: true\n- name: "054157"\n  no_core_name: true\n');
+    fs.writeFileSync(path.join(root, 'modules/jt05415x/hdl/jt05415x.v'), 'module jt05415x; endmodule\n');
+    // Core that references the module
     fs.mkdirSync(path.join(root, 'cores/moo/cfg'), { recursive: true });
     fs.writeFileSync(path.join(root, 'cores/moo/cfg/files.yaml'), 'moo:\n');
     fs.writeFileSync(path.join(root, 'cores/moo/cfg/macros.def'), 'CORENAME=moo\n');
     fs.writeFileSync(command, `#!/usr/bin/env bash
 set -euo pipefail
+if [ "$1" = mmr ]; then
+  if [ "\${2:-}" = "-m" ]; then
+    # Module mmr generation: create both output files
+    mod="$3"
+    touch "$MODULES/$mod/hdl/jt054156_mmr.v"
+    touch "$MODULES/$mod/hdl/jt054157_mmr.v"
+  fi
+  exit 0
+fi
 test "$1" = files
 test "$2" = plain
 test "$3" = moo
-# Verify the module mmr placeholder exists
+# Both module mmr files must exist
 test -f "$JTROOT/modules/jt05415x/hdl/jt054156_mmr.v"
-printf '%s\\n' "$JTROOT/modules/jt05415x/hdl/jt054156.v" > files
+test -f "$JTROOT/modules/jt05415x/hdl/jt054157_mmr.v"
+printf '%s\\n' "$JTROOT/modules/jt05415x/hdl/jt05415x.v" > files
 `);
     fs.chmodSync(command, 0o755);
-    // Write the real module file the core references
-    fs.writeFileSync(path.join(root, 'modules/jt05415x/hdl/jt054156.v'), 'module jt054156; endmodule\n');
 
-    assert.deepEqual(filesForCore(root, 'moo'), ['modules/jt05415x/hdl/jt054156.v']);
-    // Placeholder must be cleaned up after filesForCore returns
-    assert.equal(fs.existsSync(path.join(root, 'modules/jt05415x/hdl/jt054156_mmr.v')), false);
+    assert.deepEqual(filesForCore(root, 'moo'), ['modules/jt05415x/hdl/jt05415x.v']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
