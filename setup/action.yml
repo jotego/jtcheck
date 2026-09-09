@@ -1,0 +1,64 @@
+name: Setup JTCORES submodules
+description: >-
+  Initialize git submodules for a JTCORES checkout, tolerating failures on
+  private (SSH) submodules when no PAT is available. Each submodule is
+  initialized individually so one failure does not block the rest.
+inputs:
+  token:
+    description: >-
+      GitHub PAT with access to private submodules (jt900h, pocket, crasm).
+      When provided, SSH URLs are rewritten to authenticated HTTPS.
+      When omitted, private submodules are skipped and public ones still clone.
+    required: false
+    default: ''
+  skip-submodules:
+    description: >-
+      Comma-separated submodule paths to skip unconditionally
+      (not cloned even when token is available).
+    required: false
+    default: ''
+outputs:
+  skipped:
+    description: >-
+      Space-separated list of submodule paths that could not be cloned.
+    value: ${{ steps.init.outputs.skipped }}
+runs:
+  using: composite
+  steps:
+    - id: init
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        SKIP: ${{ inputs.skip-submodules }}
+        GIT_TERMINAL_PROMPT: '0'
+      run: |
+        # SSH→HTTPS rewrite when token is available
+        if [ -n "$TOKEN" ]; then
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
+            "git@github.com:"
+        fi
+
+        # Build skip set
+        declare -A skip_set
+        if [ -n "$SKIP" ]; then
+          IFS=',' read -ra skip_arr <<< "$SKIP"
+          for s in "${skip_arr[@]}"; do
+            skip_set["$(echo "$s" | xargs)"]="1"
+          done
+        fi
+
+        git submodule init
+        skipped=""
+        for sm in $(git config --file .gitmodules --get-regexp path | awk '{print $2}'); do
+          if [ -n "${skip_set[$sm]+x}" ]; then
+            echo "::notice::Skipping submodule $sm (in skip list)"
+            skipped="$skipped $sm"
+            continue
+          fi
+          if ! git submodule update --init --recursive -- "$sm" 2>&1; then
+            echo "::warning::Could not clone submodule $sm"
+            skipped="$skipped $sm"
+          fi
+        done
+        echo "skipped=${skipped# }" >> "$GITHUB_OUTPUT"
