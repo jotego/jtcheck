@@ -11,6 +11,11 @@ inputs:
       When omitted, private submodules are skipped and public ones still clone.
     required: false
     default: ''
+  repository-path:
+    description: >-
+      Path to the JTCORES checkout. Defaults to the current directory.
+    required: false
+    default: '.'
   skip-submodules:
     description: >-
       Comma-separated submodule paths to skip unconditionally
@@ -20,13 +25,14 @@ inputs:
 outputs:
   skipped:
     description: >-
-      Space-separated list of submodule paths that could not be cloned.
+      Comma-separated list of submodule paths that could not be cloned.
     value: ${{ steps.init.outputs.skipped }}
 runs:
   using: composite
   steps:
     - id: init
       shell: bash
+      working-directory: ${{ inputs.repository-path }}
       env:
         TOKEN: ${{ inputs.token }}
         SKIP: ${{ inputs.skip-submodules }}
@@ -51,14 +57,20 @@ runs:
         git submodule init
         skipped=""
         for sm in $(git config --file .gitmodules --get-regexp path | awk '{print $2}'); do
+          # Skip entries in the explicit skip list
           if [ -n "${skip_set[$sm]+x}" ]; then
             echo "::notice::Skipping submodule $sm (in skip list)"
-            skipped="$skipped $sm"
+            skipped="${skipped:+$skipped,}$sm"
+            continue
+          fi
+          # Skip orphan .gitmodules entries not registered in the tree
+          if ! git ls-tree HEAD "$sm" 2>/dev/null | grep -q '^160000 commit'; then
+            echo "::notice::Skipping orphan submodule $sm (not in tree)"
             continue
           fi
           if ! git submodule update --init --recursive -- "$sm" 2>&1; then
             echo "::warning::Could not clone submodule $sm"
-            skipped="$skipped $sm"
+            skipped="${skipped:+$skipped,}$sm"
           fi
         done
-        echo "skipped=${skipped# }" >> "$GITHUB_OUTPUT"
+        echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
